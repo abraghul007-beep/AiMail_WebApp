@@ -1,82 +1,145 @@
-# Nebula Mail — AI-Powered Mail WebApp
+# Nebula Mail — AI-Powered Gmail Workspace
 
-A Gmail-connected mail client where an AI-style copilot **controls the UI** instead of returning chat-only answers. Built for the Nebula KnowLab engineering hiring task.
+Nebula Mail is a Gmail-connected workspace where an AI Copilot **controls visible application state** instead of returning chat-only answers. It follows the supplied Nebula design while using real Gmail APIs.
 
 ## Implemented
-- Gmail OAuth 2.0 authentication.
-- Real Inbox and Sent views using Gmail API.
-- Email detail view with sender, recipient, date, subject and body.
-- Compose and send from the UI.
-- Assistant-controlled compose: extracts recipient, quoted subject and body, then visibly fills Compose.
-- Assistant search/filter commands update the main mail list.
-- Latest-email navigation and current-email context for replies.
-- UI filters for keyword and unread mail.
-- Automatic 30-second mailbox polling so new messages appear without manual refresh.
-- Gmail webhook endpoint reserved for production Pub/Sub push integration.
-- Responsive, polished UI with a dedicated copilot panel.
 
-## Run locally
-
-1. Install Node.js 18+.
-2. Create a Google Cloud project and enable the Gmail API.
-3. Create an OAuth 2.0 Web Application credential. Add `http://localhost:3000/auth/callback` as an authorized redirect URI.
-4. Copy `.env.example` to `.env` and fill in the Google client ID/secret and a random session secret.
-5. Install dependencies:
-
-```bash
-npm install
-npm start
-```
-
-6. Open `http://localhost:3000` and choose **Continue with Google**.
-
-### Required OAuth scopes
-`gmail.readonly`, `gmail.send`, and `gmail.modify` are requested because the app reads mail, sends messages, and marks messages read.
-
-## Assistant examples
-- `Send an email to john@example.com with subject 'Meeting Tomorrow' and body 'Let's meet at 3pm'`
-- `Show me emails from the last 10 days`
-- `Show only unread emails from this week`
-- `Open the latest email from David`
-- `Reply to this`
-- `Show emails from Sarah`
-- `Go to Sent`
-
-The important behavior is that assistant commands mutate application state and visibly update the main UI.
+- Google OAuth 2.0 with cryptographically random CSRF `state` validation.
+- Real Gmail Inbox, Sent, Drafts, Starred and Archive views.
+- Gmail search syntax for keyword, sender, unread and date filters.
+- Pagination with a Load older messages control (50-message pages).
+- Conversation/thread view backed by Gmail `threads.get`.
+- Compose, reply, reply-all and forward.
+- Explicit **Review & Send → Confirm & Send** human-in-the-loop flow.
+- Claude tool calling for compose, search, navigation and contextual replies when `ANTHROPIC_API_KEY` is configured.
+- Safe deterministic fallback when Claude is unavailable; fallback responses are not presented as AI-generated.
+- Rich mail result cards inside the Copilot panel.
+- Gmail Pub/Sub push support with `watch`, webhook handling and `history.list` incremental-change detection when `PUBSUB_TOPIC` is configured.
+- 30-second polling remains as a reliability fallback.
+- Sync diagnostics showing push/polling mode, history ID, watch expiry and fallback interval.
+- Responsive Nebula-style UI, dark mode, authentication/empty/error states.
+- Automated Node tests and GitHub Actions CI.
 
 ## Architecture
 
 ```text
-Browser SPA (public/)
-   ├── Mail list / detail / compose
-   └── AI Copilot command parser
-             │ HTTP JSON
-             ▼
-        Express server
-       /auth/* /api/*
-             │ OAuth 2.0
-             ▼
-          Gmail API
+Browser SPA
+  ├─ Inbox / thread reader / compose / Copilot
+  ├─ Server-Sent Events for push refresh
+  └─ 30s fallback refresh
+          │
+          ▼
+     Express server
+  ┌───────┼─────────────┐
+  │       │             │
+OAuth   Gmail API    Claude API
+  │       │             │
+  │       ├─ messages / threads / history
+  │       └─ watch → Google Cloud Pub/Sub → /api/gmail/webhook
+  └─ server-side session token storage
 ```
 
-The UI is intentionally separated from the Gmail integration. The assistant is a thin command-to-UI orchestration layer, making it straightforward to replace the parser with an LLM/function-calling layer later.
+## AI Copilot
 
-### Trade-offs
-- **Express + vanilla JS** keeps the five-day task small and easy to inspect; React/Next.js would be reasonable for a larger production application.
-- The assistant currently uses deterministic intent extraction so it works without an AI API key. Production can replace this with structured LLM tool calls while retaining the same UI actions.
-- 30-second polling is included for local/demo reliability. Gmail Pub/Sub `watch` should be configured in production for true push-based sync; the server includes a webhook route for that integration.
-- OAuth tokens are kept in the session for this assessment. Production should use encrypted persistent token storage and CSRF/state hardening appropriate to the deployment.
+With `ANTHROPIC_API_KEY`, the server calls Claude's Messages API with structured tools:
 
-## Human-in-the-loop
-The assistant opens and fills Compose but deliberately leaves the final **Send** click to the user. This demonstrates visible UI control and reduces accidental sends.
+- `compose_email` — fills a draft; never sends it.
+- `search_mail` — executes Gmail search and returns clickable result cards.
+- `navigate_mail` — changes the visible folder.
+- `prepare_reply` — prepares a contextual reply using the open message.
 
-## What I would improve with more time
-1. Replace deterministic assistant parsing with LLM tool/function calling and schema validation.
-2. Add Gmail Pub/Sub watch renewal, webhook verification and history-ID based incremental sync.
-3. Persist encrypted OAuth tokens and add robust session/security controls.
-4. Add conversation/thread view, forwarding, attachments and rich email rendering.
-5. Add automated unit/E2E tests and CI.
-6. Deploy the app with HTTPS and add screenshots/video plus monitoring.
+The Anthropic key is server-side only. If Claude is unavailable, the small deterministic fallback keeps basic navigation/filtering usable and explicitly says that Claude is not active.
+
+## Real-time sync
+
+**Push mode:** set `PUBSUB_TOPIC` to a fully qualified Google Cloud Pub/Sub topic. Authenticated startup creates/renews a Gmail `watch`; Pub/Sub notifications reach `/api/gmail/webhook`; Gmail history is inspected and an SSE event refreshes the browser.
+
+**Fallback mode:** without Pub/Sub configuration the browser refreshes every 30 seconds. Even in push mode the fallback remains enabled so a missed push cannot silently leave the mailbox stale.
+
+The UI says **“Push sync active”** only when push mode is configured. Otherwise it says **“Auto-refreshing every 30s”**.
+
+### Pub/Sub setup
+
+1. Enable Gmail API and Cloud Pub/Sub in Google Cloud.
+2. Create a Pub/Sub topic such as `projects/YOUR_PROJECT/topics/gmail-events`.
+3. Grant `gmail-api-push@system.gserviceaccount.com` permission to publish to the topic.
+4. Create a push subscription targeting `https://YOUR_HOST/api/gmail/webhook`.
+5. Set `PUBSUB_TOPIC` in `.env`.
+6. Optionally set `PUBSUB_VERIFICATION_TOKEN` and append `?token=...` to the push URL.
+7. Open Sync Diagnostics after login to verify watch expiry and mode.
+
+## Local setup
+
+Requirements: Node.js 18+.
+
+```bash
+cp .env.example .env
+npm install
+npm test
+npm start
+```
+
+Open `http://localhost:3000` and choose **Continue with Google**.
+
+### Environment
+
+```text
+PORT=3000
+NODE_ENV=development
+SESSION_SECRET=replace-with-a-long-random-secret
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://localhost:3000/auth/callback
+ANTHROPIC_API_KEY=...                 # optional; enables Claude tool calling
+ANTHROPIC_MODEL=claude-sonnet-4-6     # optional
+PUBSUB_TOPIC=projects/.../topics/...  # optional push mode
+PUBSUB_VERIFICATION_TOKEN=...         # optional webhook verification
+POLL_INTERVAL_SECONDS=30
+```
+
+## Screens / design evidence
+
+![Nebula Mail main workspace](docs/screenshots/main-workspace.svg)
+
+The implementation covers the supplied design states for authentication/onboarding, empty search, token-expiration/error handling, compose, AI confirmation, AI Copilot and sync diagnostics.
+
+## Security and reliability
+
+- OAuth callbacks verify a per-session `state` value.
+- OAuth tokens are never exposed to browser JavaScript.
+- Email content is escaped and displayed as plain text instead of injecting arbitrary HTML.
+- Sending requires form validation plus an explicit second confirmation action.
+- Archive uses Gmail search (`-label:inbox -label:trash -label:spam`) rather than an invalid `ARCHIVE` label ID.
+- Gmail history IDs are tracked for push refreshes; 30-second fallback refresh is the recovery path if history/push delivery is unavailable.
+- Session storage is in-memory for the assessment. A production deployment should use encrypted persistent session/token storage and a shared state/event store for multiple instances.
+
+## Tests and CI
+
+Run `npm test` locally. GitHub Actions runs the same suite on pushes and pull requests to `main`.
+
+The tests cover Gmail normalization, multipart body extraction, search construction, Archive semantics and unauthenticated API protection.
 
 ## Hiring-task coverage
-The implementation targets the task's highest-weight requirements: real mail integration, Inbox/Sent data, compose/send, assistant-driven visible UI control, search/filter updates, and context-aware reply behavior. The task also lists real-time sync and several bonus items; polling provides a demo-friendly sync path while Pub/Sub is documented as the production next step.
+
+| Requirement | Status |
+|---|---|
+| Gmail integration | Implemented |
+| Inbox + Sent | Implemented |
+| Compose + send | Implemented |
+| Natural-language UI control | Claude tool calling + safe fallback |
+| Search/filter UI mutation | Implemented |
+| Contextual reply | Implemented |
+| Human confirmation before send | Implemented |
+| Thread/conversation view | Implemented |
+| Copilot rich result previews | Implemented |
+| Push sync | Implemented when Pub/Sub is configured |
+| Polling fallback | Implemented |
+| OAuth CSRF state | Implemented |
+| Pagination | Implemented |
+| Automated tests | Implemented |
+| CI | Implemented |
+| Live deployment | Not claimed; requires deployment infrastructure |
+
+## Production boundary
+
+This is an assessment-ready application, not a claim of a fully operated SaaS platform. Persistent encrypted OAuth/session storage, multi-instance shared event delivery, managed secrets, observability and an HTTPS deployment belong in the deployment layer. The core code paths for push sync, Claude tools, pagination, thread views and human confirmation are implemented rather than left as README-only TODOs.
