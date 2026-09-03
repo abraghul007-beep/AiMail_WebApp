@@ -1,1 +1,25 @@
-.rail button{display:grid;place-items:center}.material-symbols-outlined{font-size:19px}.mail-card+.mail-card{margin-top:10px}.mail-card:first-of-type{border-color:#deded9}.copilot .icon-btn{flex:none}.copilot .muted{margin-left:6px}.result-card{cursor:pointer}.result-card:hover{background:#f7f7f4}.compose-box .ai-brief{margin:0}.modal .compose-head button{font-size:18px}.modal{backdrop-filter:blur(3px)}@media(max-width:1050px){.copilot{right:12px;bottom:12px}.reader-title{font-size:30px}}
+/* Supplementary component utilities & micro-animations */
+.copilot-on {
+  animation: pulseGlow 2.5s infinite alternate;
+}
+
+@keyframes pulseGlow {
+  0% {
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 18px rgba(168, 85, 247, 0.45);
+  }
+}
+
+.mail-card:hover {
+  border-color: #434f70;
+}
+
+.message-card:active {
+  background: var(--bg-surface-active);
+}
+
+.chip-btn:active {
+  transform: scale(0.96);
+}
