@@ -11,7 +11,239 @@ app.get('/auth/url',(req,res)=>{const state=crypto.randomBytes(32).toString('hex
 app.get('/api/me',guard,async(req,res)=>{try{const p=await gmail(req).users.getProfile({userId:'me'});res.json({email:p.data.emailAddress,push:{configured:!!process.env.PUBSUB_TOPIC}})}catch{res.status(500).json({error:'Unable to load account.'})}});app.get('/api/messages',guard,async(req,res)=>{try{res.json(await list(req))}catch{res.status(500).json({error:'Unable to load messages.'})}});app.get('/api/messages/:id',guard,async(req,res)=>{try{res.json(normalize((await gmail(req).users.messages.get({userId:'me',id:req.params.id,format:'full'})).data))}catch{res.status(404).json({error:'Message not found.'})}});app.get('/api/threads/:id',guard,async(req,res)=>{try{const t=await gmail(req).users.threads.get({userId:'me',id:req.params.id,format:'full'});res.json({id:t.data.id,messages:(t.data.messages||[]).map(normalize)})}catch{res.status(404).json({error:'Conversation not found.'})}});app.post('/api/messages/:id/read',guard,async(req,res)=>{try{await gmail(req).users.messages.modify({userId:'me',id:req.params.id,requestBody:{removeLabelIds:['UNREAD']}});res.json({ok:true})}catch{res.status(500).json({error:'Unable to mark read.'})}});
 app.post('/api/send',guard,async(req,res)=>{try{const{to,cc,bcc,subject,body:messageBody}=req.body||{};if(!to||!subject||!messageBody)return res.status(400).json({error:'To, subject and message are required.'});if([to,cc,bcc,subject].some(x=>x&&/[\r\n]/.test(x)))return res.status(400).json({error:'Invalid message headers.'});const h=[`To: ${to}`];if(cc)h.push(`Cc: ${cc}`);if(bcc)h.push(`Bcc: ${bcc}`);h.push(`Subject: ${subject}`,'MIME-Version: 1.0','Content-Type: text/plain; charset=utf-8');const r=await gmail(req).users.messages.send({userId:'me',requestBody:{raw:Buffer.from([...h,'',messageBody].join('\r\n')).toString('base64url'),threadId:req.body.threadId||undefined}});res.json({ok:true,id:r.data.id})}catch{res.status(500).json({error:'Unable to send message.'})}});
 app.get('/api/sync/status',guard,(req,res)=>res.json({mode:process.env.PUBSUB_TOPIC?'push+fallback':'polling',pollIntervalSeconds:Number(process.env.POLL_INTERVAL_SECONDS||30)}));app.get('/api/events',guard,async(req,res)=>{try{const email=(await gmail(req).users.getProfile({userId:'me'})).data.emailAddress;res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache',Connection:'keep-alive'});res.flushHeaders?.();if(!clients.has(email))clients.set(email,new Set());clients.get(email).add(res);res.write('event: ready\ndata: {}\n\n');const hb=setInterval(()=>res.write(': ping\n\n'),25000);req.on('close',()=>{clearInterval(hb);clients.get(email)?.delete(res)})}catch{res.end()}});app.post('/api/gmail/webhook',(req,res)=>{try{if(process.env.PUBSUB_VERIFICATION_TOKEN&&req.query.token!==process.env.PUBSUB_VERIFICATION_TOKEN)return res.sendStatus(401);const d=req.body?.message?.data;if(!d)return res.sendStatus(204);const n=JSON.parse(Buffer.from(d,'base64url').toString()),set=clients.get(n.emailAddress)||new Set();for(const r of set)r.write(`event: mailbox.changed\ndata: ${JSON.stringify(n)}\n\n`);res.sendStatus(204)}catch{res.sendStatus(500)}});
-const tools=[{type:'function',function:{name:'navigate_mail',description:'Navigate Gmail folder',parameters:{type:'object',properties:{folder:{type:'string',enum:['INBOX','SENT','DRAFT','STARRED','ARCHIVE']}},required:['folder']}}},{type:'function',function:{name:'search_mail',description:'Search Gmail',parameters:{type:'object',properties:{query:{type:'string'},maxResults:{type:'integer'}},required:['query']}}},{type:'function',function:{name:'compose_email',description:'Prepare an email draft; never send',parameters:{type:'object',properties:{to:{type:'string'},cc:{type:'string'},subject:{type:'string'},body:{type:'string'}},required:['to','subject','body']}}},{type:'function',function:{name:'prepare_reply',description:'Prepare a reply draft; never send',parameters:{type:'object',properties:{body:{type:'string'}},required:['body']}}}];
-async function groq(message,context){const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${process.env.GROQ_API_KEY}`},body:JSON.stringify({model:process.env.GROQ_MODEL||'llama-3.3-70b-versatile',temperature:.2,max_tokens:900,tools,tool_choice:'auto',messages:[{role:'system',content:'You are Nebula Mail Copilot. Use tools to control the mail UI. Never send mail. Drafts require human confirmation. Be concise.'},{role:'user',content:`${message}\nContext:${JSON.stringify(context||{})}`}]})});const d=await r.json();if(!r.ok)throw Error('Groq request failed');return d.choices?.[0]?.message||{content:'Done.'}}
-async function assistant(req,message,context){if(!process.env.GROQ_API_KEY)return{ai:false,text:'AI is not configured. Mail features still work.',actions:[]};try{const m=await groq(message,context),actions=[];for(const c of m.tool_calls||[]){const a=JSON.parse(c.function.arguments||'{}');if(c.function.name==='navigate_mail')actions.push({type:'navigate',folder:a.folder});if(c.function.name==='compose_email')actions.push({type:'compose',data:a});if(c.function.name==='search_mail')actions.push({type:'search_results',...(await list({...req,query:{q:a.query,label:'INBOX',maxResults:a.maxResults||5}}))});if(c.function.name==='prepare_reply'&&context?.currentMessage){const x=context.currentMessage;actions.push({type:'compose',data:{to:x.sender,subject:/^re:/i.test(x.subject)?x.subject:`Re: ${x.subject}`,body:`${a.body}\n\nOn ${x.date}, ${x.sender} wrote:\n> ${(x.body||'').slice(0,1800).replace(/\n/g,'\n> ')}`,threadId:x.threadId}})}}return{ai:true,provider:'Groq',text:m.content||'Done.',actions}}catch{return{ai:false,text:'AI is temporarily unavailable. You can continue using mail normally.',actions:[]}}}
-app.post('/api/assistant',guard,async(req,res)=>res.json(await assistant(req,req.body?.message,req.body?.context)));app.use(express.static(path.join(__dirname,'public')));app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));if(require.main===module)app.listen(PORT,()=>console.log(`Nebula Mail listening on ${PORT}`));module.exports={app,normalize,bodyFromPayload:body,appendQuery:buildQuery,listOptions};
+const tools=[
+  {
+    type: 'function',
+    function: {
+      name: 'navigate_mail',
+      description: 'Navigate to a Gmail folder view (INBOX, SENT, DRAFT, STARRED, ARCHIVE)',
+      parameters: {
+        type: 'object',
+        properties: {
+          folder: { type: 'string', enum: ['INBOX', 'SENT', 'DRAFT', 'STARRED', 'ARCHIVE'] }
+        },
+        required: ['folder']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_mail',
+      description: 'Search Gmail and display results in both the main message list and assistant panel',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search term or query e.g. "project update" or "newer_than:10d" or "from:Sarah"' },
+          maxResults: { type: 'integer' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'open_email',
+      description: 'Find and immediately open a specific email in the detail reading pane',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Query to locate the email to open, e.g. "from:David" or subject' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'filter_mail',
+      description: 'Filter messages by unread state, date range, or folder in the main UI',
+      parameters: {
+        type: 'object',
+        properties: {
+          folder: { type: 'string', enum: ['INBOX', 'SENT', 'DRAFT', 'STARRED', 'ARCHIVE'] },
+          unreadOnly: { type: 'boolean' },
+          query: { type: 'string', description: 'Gmail search filter' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'compose_email',
+      description: 'Open the compose dialog and pre-fill email fields (To, Subject, Body); never sends directly without human confirmation',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string' },
+          cc: { type: 'string' },
+          subject: { type: 'string' },
+          body: { type: 'string' }
+        },
+        required: ['to', 'subject', 'body']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'prepare_reply',
+      description: 'Prepare a reply draft to the currently open email; never sends directly without human confirmation',
+      parameters: {
+        type: 'object',
+        properties: {
+          body: { type: 'string' }
+        },
+        required: ['body']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'prepare_forward',
+      description: 'Prepare a forward draft of the currently open email',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string' },
+          body: { type: 'string' }
+        },
+        required: ['to']
+      }
+    }
+  }
+];
+
+async function groq(message, context) {
+  const models = [
+    process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
+    'qwen/qwen3.8-27b'
+  ];
+  
+  // Deduplicate candidate models
+  const uniqueModels = [...new Set(models.filter(Boolean))];
+  let lastError = null;
+
+  for (const model of uniqueModels) {
+    try {
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${process.env.GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          max_tokens: 900,
+          tools,
+          tool_choice: 'auto',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are Nebula Mail Copilot. You control the email client UI programmatically on the user\'s behalf (navigating folders, searching, opening specific emails, preparing compose/reply drafts, filtering). When users request email operations, use the appropriate tools to manipulate the UI. Never execute a send without human review. Be concise, direct, and helpful.'
+            },
+            {
+              role: 'user',
+              content: `${message}\nCurrent Context:${JSON.stringify(context || {})}`
+            }
+          ]
+        })
+      });
+
+      const d = await r.json();
+      if (!r.ok) {
+        lastError = new Error(d.error?.message || `Groq HTTP ${r.status}`);
+        console.warn(`[Groq Model ${model} failed]:`, d.error?.message || r.statusText);
+        continue;
+      }
+      return d.choices?.[0]?.message || { content: 'Done.' };
+    } catch (err) {
+      lastError = err;
+      console.warn(`[Groq Connection Error on ${model}]:`, err.message);
+    }
+  }
+
+  throw lastError || new Error('All Groq model candidates failed');
+}
+
+async function assistant(req, message, context) {
+  if (!process.env.GROQ_API_KEY) {
+    return { ai: false, text: 'AI is not configured. Please add GROQ_API_KEY to your .env file.', actions: [] };
+  }
+  try {
+    const m = await groq(message, context);
+    const actions = [];
+    for (const c of m.tool_calls || []) {
+      const a = JSON.parse(c.function.arguments || '{}');
+      if (c.function.name === 'navigate_mail') {
+        actions.push({ type: 'navigate', folder: a.folder });
+      }
+      if (c.function.name === 'compose_email') {
+        actions.push({ type: 'compose', data: a });
+      }
+      if (c.function.name === 'search_mail') {
+        const results = await list({ ...req, query: { q: a.query, label: 'INBOX', maxResults: a.maxResults || 10 } });
+        actions.push({ type: 'search_results', query: a.query, ...results });
+      }
+      if (c.function.name === 'filter_mail') {
+        actions.push({ type: 'filter', folder: a.folder, unreadOnly: a.unreadOnly, query: a.query });
+      }
+      if (c.function.name === 'open_email') {
+        const results = await list({ ...req, query: { q: a.query, label: 'INBOX', maxResults: 1 } });
+        const top = results.messages?.[0];
+        if (top) {
+          actions.push({ type: 'open_message', id: top.id, message: top });
+        } else {
+          actions.push({ type: 'search_results', query: a.query, messages: [] });
+        }
+      }
+      if (c.function.name === 'prepare_reply' && context?.currentMessage) {
+        const x = context.currentMessage;
+        actions.push({
+          type: 'compose',
+          data: {
+            title: 'Reply',
+            to: x.sender,
+            subject: /^re:/i.test(x.subject) ? x.subject : `Re: ${x.subject}`,
+            body: `${a.body || ''}\n\nOn ${x.date}, ${x.sender} wrote:\n> ${(x.body || '').slice(0, 1800).replace(/\n/g, '\n> ')}`,
+            threadId: x.threadId
+          }
+        });
+      }
+      if (c.function.name === 'prepare_forward' && context?.currentMessage) {
+        const x = context.currentMessage;
+        actions.push({
+          type: 'compose',
+          data: {
+            title: 'Forward',
+            to: a.to || '',
+            subject: /^fwd:/i.test(x.subject) ? x.subject : `Fwd: ${x.subject}`,
+            body: `${a.body || ''}\n\n---------- Forwarded message ----------\nFrom: ${x.sender}\nDate: ${x.date}\nSubject: ${x.subject}\nTo: ${x.to}\n\n${x.body || ''}`,
+            threadId: x.threadId
+          }
+        });
+      }
+    }
+    return { ai: true, provider: 'Groq', text: m.content || 'Done.', actions };
+  } catch (err) {
+    console.error('[Copilot Assistant Error]:', err.message);
+    return { ai: false, text: `AI error: ${err.message}. You can continue using mail normally.`, actions: [] };
+  }
+}
+
+app.post('/api/assistant', guard, async (req, res) => res.json(await assistant(req, req.body?.message, req.body?.context)));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Nebula Mail listening on ${PORT}`));
+}
+
+module.exports = { app, normalize, bodyFromPayload: body, appendQuery: buildQuery, listOptions, tools, assistant };

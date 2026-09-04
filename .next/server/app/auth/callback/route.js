@@ -1,0 +1,8 @@
+var R=require("../../../chunks/[turbopack]_runtime.js")("server/app/auth/callback/route.js")
+R.c("server/chunks/[root-of-the-server]__12uj8xo._.js")
+R.c("server/chunks/[root-of-the-server]__0xclp92._.js")
+R.c("server/chunks/[root-of-the-server]__1vvtx9j._.js")
+R.c("server/chunks/[root-of-the-server]__0l3yhx4._.js")
+R.c("server/chunks/_next-internal_server_app_auth_callback_route_actions_0gq6cy0.js")
+R.m(97749)
+module.exports=R.m(97749).exports
