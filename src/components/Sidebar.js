@@ -1,21 +1,43 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export function Sidebar({ folder, unreadCount = 0, onNavigate, onCompose, syncMode, lastSyncTime, onRefresh }) {
   const [displayTime, setDisplayTime] = useState('');
+  const pushVersionRef = useRef(null);
 
   useEffect(() => {
     setDisplayTime(lastSyncTime || new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
   }, [lastSyncTime]);
 
-  // Fallback sync: keep the visible mailbox fresh even when Gmail Pub/Sub is not configured.
+  // Fallback sync keeps the mailbox fresh when Pub/Sub is unavailable.
   useEffect(() => {
     const interval = Number(process.env.NEXT_PUBLIC_POLL_INTERVAL_SECONDS || 30);
     if (!Number.isFinite(interval) || interval <= 0 || !onRefresh) return undefined;
     const id = window.setInterval(() => onRefresh(), interval * 1000);
     return () => window.clearInterval(id);
   }, [onRefresh]);
+
+  // Push-aware sync: the server records a Pub/Sub event and the browser immediately
+  // performs an authenticated Gmail refresh. The webhook never sends mailbox data.
+  useEffect(() => {
+    if (!onRefresh || !String(syncMode || '').toLowerCase().includes('push')) return undefined;
+    const check = async () => {
+      try {
+        const res = await fetch('/api/sync/status', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (pushVersionRef.current === null) pushVersionRef.current = data.pushVersion;
+        else if (data.pushVersion !== pushVersionRef.current) {
+          pushVersionRef.current = data.pushVersion;
+          onRefresh();
+        }
+      } catch { /* fallback sync remains active */ }
+    };
+    check();
+    const id = window.setInterval(check, 5000);
+    return () => window.clearInterval(id);
+  }, [onRefresh, syncMode]);
 
   return (
     <aside className="sidebar">
