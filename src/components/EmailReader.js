@@ -4,8 +4,23 @@ import React, { useState, useEffect, useRef } from 'react';
 import { cleanSender, initials, formatFullDate } from '@/lib/utils';
 import { Icon } from './Icons';
 
+function prepareEmailHtml(html = '') {
+  if (!html) return '';
+  return html
+    .replace(/src="\/\//gi, 'src="https://')
+    .replace(/src='\/\//gi, "src='https://")
+    .replace(/srcset="\/\//gi, 'srcset="https://')
+    .replace(/<img\s+([^>]*)/gi, (m, attrs) => {
+      if (!attrs.includes('referrerpolicy')) {
+        return `<img referrerpolicy="no-referrer" ${attrs}`;
+      }
+      return m;
+    });
+}
+
 function HtmlEmailFrame({ htmlContent }) {
   const iframeRef = useRef(null);
+  const preparedHtml = prepareEmailHtml(htmlContent);
 
   const formattedDoc = `
     <!DOCTYPE html>
@@ -14,25 +29,28 @@ function HtmlEmailFrame({ htmlContent }) {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="referrer" content="no-referrer">
+        <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; img-src * data: blob: https: http:; style-src * 'unsafe-inline'; font-src * data:;">
         <base target="_blank">
         <style>
-          body {
+          *, *:before, *:after { box-sizing: border-box; }
+          html, body {
+            margin: 0;
+            padding: 8px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             font-size: 14px;
-            line-height: 1.6;
+            line-height: 1.5;
             color: #202124;
-            margin: 0;
-            padding: 6px;
             word-break: break-word;
+            background-color: transparent;
           }
-          img { max-width: 100% !important; height: auto !important; display: inline-block; }
+          img { max-width: 100%; height: auto; display: inline-block; }
           a { color: #1a73e8; }
           blockquote { border-left: 2px solid #dadce0; margin-left: 0; padding-left: 12px; color: #5f6368; }
           table { max-width: 100% !important; }
         </style>
       </head>
       <body>
-        ${htmlContent || ''}
+        ${preparedHtml || ''}
       </body>
     </html>
   `;
@@ -45,8 +63,13 @@ function HtmlEmailFrame({ htmlContent }) {
       try {
         const doc = iframe.contentDocument || iframe.contentWindow?.document;
         if (doc && doc.body) {
-          const contentHeight = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 180);
-          iframe.style.height = `${contentHeight + 32}px`;
+          const contentHeight = Math.max(
+            doc.body.scrollHeight,
+            doc.documentElement.scrollHeight,
+            doc.body.offsetHeight,
+            180
+          );
+          iframe.style.height = `${contentHeight + 36}px`;
         }
       } catch (e) {}
     };
@@ -69,8 +92,12 @@ function HtmlEmailFrame({ htmlContent }) {
     iframe.addEventListener('load', onLoad);
     adjustHeight();
 
+    // Re-adjust after short delay in case of late network image rendering
+    const t = setTimeout(adjustHeight, 500);
+
     return () => {
       iframe.removeEventListener('load', onLoad);
+      clearTimeout(t);
     };
   }, [htmlContent]);
 
@@ -79,7 +106,6 @@ function HtmlEmailFrame({ htmlContent }) {
       ref={iframeRef}
       srcDoc={formattedDoc}
       title="Email Body"
-      sandbox="allow-same-origin allow-popups"
       style={{
         width: '100%',
         border: 'none',
