@@ -17,6 +17,18 @@ export function initials(nameOrEmail = '') {
   return clean.slice(0, 2).toUpperCase() || 'U';
 }
 
+export function avatarColor(text = '') {
+  const colors = [
+    '#073f9f', '#1e40af', '#0284c7', '#0f766e', '#15803d',
+    '#b45309', '#c2410c', '#b91c1c', '#6b21a8', '#86198f'
+  ];
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = text.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
 export function formatDate(dateString) {
   if (!dateString) return '';
   const date = new Date(dateString);

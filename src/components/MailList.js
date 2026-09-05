@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { cleanSender, formatDate } from '@/lib/utils';
+import { cleanSender, formatDate, initials, avatarColor } from '@/lib/utils';
 
 export function MailList({
   folder,
@@ -94,24 +94,39 @@ export function MailList({
               rowDisplayName = `Draft to: ${cleanSender(msg.to || 'No recipient')}`;
             }
             const dateStr = formatDate(msg.date);
+            const avatarText = folder === 'SENT' ? (msg.to || 'Recipient') : (msg.sender || 'Unknown');
+            const avatarInit = initials(avatarText);
+            const avatarBg = avatarColor(avatarText);
 
             return (
               <article
                 key={msg.id}
                 className={`message-row-item ${isUnread ? 'unread' : ''} ${isSelected ? 'selected' : ''}`}
-                onClick={() => onSelectMessage(msg.id)}
+                onClick={() => onSelectMessage(msg.id, msg)}
                 data-message-id={msg.id}
               >
-                <div className="row-top">
-                  <span className="row-sender" title={folder === 'SENT' ? (msg.to || msg.sender) : msg.sender}>
-                    {rowDisplayName}
-                  </span>
-                  <span className="row-date">{dateStr}</span>
+                <div className="row-avatar-col">
+                  <div
+                    className="row-avatar-circle"
+                    style={{ backgroundColor: avatarBg }}
+                    title={rowDisplayName}
+                  >
+                    {avatarInit}
+                  </div>
                 </div>
-                <div className="row-subject" title={msg.subject}>
-                  {msg.subject || '(no subject)'}
+
+                <div className="row-content-col">
+                  <div className="row-top">
+                    <span className="row-sender" title={folder === 'SENT' ? (msg.to || msg.sender) : msg.sender}>
+                      {rowDisplayName}
+                    </span>
+                    <span className="row-date">{dateStr}</span>
+                  </div>
+                  <div className="row-subject" title={msg.subject}>
+                    {msg.subject || '(no subject)'}
+                  </div>
+                  <div className="row-snippet">{msg.snippet || ''}</div>
                 </div>
-                <div className="row-snippet">{msg.snippet || ''}</div>
               </article>
             );
           })

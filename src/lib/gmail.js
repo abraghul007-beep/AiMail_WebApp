@@ -42,19 +42,40 @@ export const decodeBase64Url = (str = '') => {
 };
 
 /**
- * Recursively parse message payload to extract both plain text and HTML bodies
+ * Recursively parse message payload to extract both plain text and HTML bodies,
+ * resolving inline CID attachments (e.g. company logos and embedded images)
  */
-export function extractBodies(payload) {
+export function extractBodies(payload, messageId = '') {
   let textBody = '';
   let htmlBody = '';
+  const inlineImages = [];
 
   function walk(part) {
     if (!part) return;
 
-    if (part.mimeType === 'text/plain' && part.body?.data && !textBody) {
+    const mime = part.mimeType || '';
+    const contentIdHeader = getHeader(part.headers || [], 'Content-ID') || getHeader(part.headers || [], 'Content-Id');
+    const contentId = contentIdHeader.replace(/^<|>$/g, '').trim();
+
+    if (mime === 'text/plain' && part.body?.data && !textBody) {
       textBody = decodeBase64Url(part.body.data);
-    } else if (part.mimeType === 'text/html' && part.body?.data && !htmlBody) {
+    } else if (mime === 'text/html' && part.body?.data && !htmlBody) {
       htmlBody = decodeBase64Url(part.body.data);
+    }
+
+    if (mime.startsWith('image/')) {
+      if (part.body?.data) {
+        const base64 = part.body.data.replace(/-/g, '+').replace(/_/g, '/');
+        const dataUrl = `data:${mime};base64,${base64}`;
+        if (contentId) {
+          inlineImages.push({ cid: contentId, url: dataUrl });
+        }
+      } else if (part.body?.attachmentId && messageId) {
+        const attachmentUrl = `/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(part.body.attachmentId)}?mime=${encodeURIComponent(mime)}`;
+        if (contentId) {
+          inlineImages.push({ cid: contentId, url: attachmentUrl });
+        }
+      }
     }
 
     if (part.parts && Array.isArray(part.parts)) {
@@ -65,6 +86,15 @@ export function extractBodies(payload) {
   }
 
   walk(payload);
+
+  if (htmlBody && inlineImages.length > 0) {
+    for (const img of inlineImages) {
+      const escapedCid = img.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`cid:<?${escapedCid}>?`, 'gi');
+      htmlBody = htmlBody.replace(regex, img.url);
+    }
+  }
+
   return {
     textBody: textBody || (htmlBody ? htmlBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : ''),
     htmlBody: htmlBody || (textBody ? `<pre style="font-family:inherit;white-space:pre-wrap;">${textBody}</pre>` : '')
@@ -74,7 +104,7 @@ export function extractBodies(payload) {
 export function normalizeMessage(m) {
   if (!m) return null;
   const headers = m.payload?.headers || [];
-  const { textBody, htmlBody } = extractBodies(m.payload);
+  const { textBody, htmlBody } = extractBodies(m.payload, m.id);
 
   return {
     id: m.id,
@@ -117,13 +147,17 @@ export function listOptions(params = {}) {
     options.pageToken = String(params.pageToken);
   }
 
-  if (['INBOX', 'SENT', 'DRAFT', 'STARRED', 'SPAM', 'TRASH'].includes(label)) {
+  if (['INBOX', 'SENT', 'STARRED', 'SPAM', 'TRASH'].includes(label)) {
     options.labelIds = [label];
     if (query) {
       options.q = query;
     }
+  } else if (label === 'DRAFT') {
+    options.labelIds = ['DRAFT'];
+    const draftFilter = '-label:sent';
+    options.q = query ? `${query} ${draftFilter}` : draftFilter;
   } else if (label === 'ARCHIVE') {
-    const archiveClause = '-label:inbox -label:trash -label:spam';
+    const archiveClause = '-label:inbox -label:sent -label:draft -label:trash -label:spam';
     options.q = query ? `${query} ${archiveClause}` : archiveClause;
   }
 
@@ -131,6 +165,37 @@ export function listOptions(params = {}) {
 }
 
 export async function fetchMessageList(gmail, params = {}) {
+  const label = String(params.label || 'INBOX').toUpperCase();
+
+  // If fetching Drafts, use the dedicated Gmail Drafts API for 100% accuracy
+  if (label === 'DRAFT' && !params.q) {
+    try {
+      const res = await gmail.users.drafts.list({
+        userId: 'me',
+        maxResults: Math.min(Math.max(Number(params.maxResults || 30), 1), 50),
+        pageToken: params.pageToken ? String(params.pageToken) : undefined
+      });
+      const drafts = res.data.drafts || [];
+      const fullDrafts = await Promise.all(
+        drafts.map(async (item) => {
+          try {
+            const d = await gmail.users.drafts.get({ userId: 'me', id: item.id, format: 'full' });
+            const norm = normalizeMessage(d.data.message);
+            return norm ? { ...norm, draftId: d.data.id } : null;
+          } catch (e) {
+            return null;
+          }
+        })
+      );
+      return {
+        messages: fullDrafts.filter(Boolean),
+        nextPageToken: res.data.nextPageToken || null
+      };
+    } catch (err) {
+      console.warn('Gmail Drafts list API error, falling back to messages:', err.message);
+    }
+  }
+
   const opts = listOptions(params);
   const res = await gmail.users.messages.list(opts);
   const list = res.data.messages || [];
@@ -140,7 +205,7 @@ export async function fetchMessageList(gmail, params = {}) {
   );
 
   return {
-    messages: fullMessages.map(m => normalizeMessage(m.data)),
+    messages: fullMessages.map(m => normalizeMessage(m.data)).filter(Boolean),
     nextPageToken: res.data.nextPageToken || null
   };
 }

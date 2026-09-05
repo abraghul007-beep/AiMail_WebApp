@@ -89,8 +89,12 @@ export default function WorkspacePage() {
     }
   }, [folder, searchQuery, unreadOnly, nextPageToken]);
 
-  const openMessage = async (id) => {
+  const openMessage = async (id, immediateMsg = null) => {
     if (!id) return;
+    if (immediateMsg) {
+      setCurrentMessage(immediateMsg);
+      setThread([immediateMsg]);
+    }
     try {
       const res = await fetch(`/api/messages/${encodeURIComponent(id)}`);
       if (res.status === 401) {
@@ -199,6 +203,20 @@ export default function WorkspacePage() {
       title: 'Forward',
       subject: /^fwd:/i.test(msg.subject || '') ? msg.subject : `Fwd: ${msg.subject || ''}`,
       body: `\n\n---------- Forwarded message ----------\nFrom: ${msg.sender}\nDate: ${msg.date}\nSubject: ${msg.subject}\nTo: ${msg.to}\n\n${msg.body || ''}`
+    });
+  };
+
+  const handleEditDraft = (msg = currentMessage) => {
+    if (!msg) return;
+    setComposeData({
+      title: 'Edit Draft',
+      to: msg.to || '',
+      cc: msg.cc || '',
+      bcc: msg.bcc || '',
+      subject: msg.subject || '',
+      body: msg.body || msg.snippet || '',
+      threadId: msg.threadId,
+      draftId: msg.draftId
     });
   };
 
@@ -362,6 +380,7 @@ export default function WorkspacePage() {
         thread={thread}
         onReply={handleReply}
         onForward={handleForward}
+        onEditDraft={handleEditDraft}
         onBack={() => setCurrentMessage(null)}
       />
 

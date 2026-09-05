@@ -7,65 +7,83 @@ import { Icon } from './Icons';
 function HtmlEmailFrame({ htmlContent }) {
   const iframeRef = useRef(null);
 
+  const formattedDoc = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="referrer" content="no-referrer">
+        <base target="_blank">
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #202124;
+            margin: 0;
+            padding: 6px;
+            word-break: break-word;
+          }
+          img { max-width: 100% !important; height: auto !important; display: inline-block; }
+          a { color: #1a73e8; }
+          blockquote { border-left: 2px solid #dadce0; margin-left: 0; padding-left: 12px; color: #5f6368; }
+          table { max-width: 100% !important; }
+        </style>
+      </head>
+      <body>
+        ${htmlContent || ''}
+      </body>
+    </html>
+  `;
+
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!doc) return;
+    const adjustHeight = () => {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc && doc.body) {
+          const contentHeight = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 180);
+          iframe.style.height = `${contentHeight + 32}px`;
+        }
+      } catch (e) {}
+    };
 
-    doc.open();
-    doc.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-              font-size: 14px;
-              line-height: 1.6;
-              color: #202124;
-              margin: 0;
-              padding: 4px;
-              word-break: break-word;
-            }
-            img { max-width: 100%; height: auto; }
-            a { color: #1a73e8; }
-            blockquote { border-left: 2px solid #dadce0; margin-left: 0; padding-left: 12px; color: #5f6368; }
-          </style>
-        </head>
-        <body>
-          ${htmlContent || ''}
-        </body>
-      </html>
-    `);
-    doc.close();
+    const onLoad = () => {
+      adjustHeight();
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          doc.querySelectorAll('img').forEach((img) => {
+            img.addEventListener('load', adjustHeight);
+            img.addEventListener('error', adjustHeight);
+          });
+          const ro = new ResizeObserver(adjustHeight);
+          ro.observe(doc.body);
+        }
+      } catch (e) {}
+    };
 
-    // Auto-adjust height to match content
-    const resizeObserver = new ResizeObserver(() => {
-      if (doc.body) {
-        iframe.style.height = `${Math.max(doc.body.scrollHeight + 20, 160)}px`;
-      }
-    });
+    iframe.addEventListener('load', onLoad);
+    adjustHeight();
 
-    if (doc.body) {
-      resizeObserver.observe(doc.body);
-    }
-
-    return () => resizeObserver.disconnect();
+    return () => {
+      iframe.removeEventListener('load', onLoad);
+    };
   }, [htmlContent]);
 
   return (
     <iframe
       ref={iframeRef}
+      srcDoc={formattedDoc}
       title="Email Body"
       sandbox="allow-same-origin allow-popups"
       style={{
         width: '100%',
         border: 'none',
-        minHeight: '200px',
+        minHeight: '220px',
         overflow: 'hidden',
         display: 'block'
       }}
@@ -73,8 +91,12 @@ function HtmlEmailFrame({ htmlContent }) {
   );
 }
 
-export function EmailReader({ message, thread = [], onReply, onForward, onBack }) {
+export function EmailReader({ message, thread = [], onReply, onForward, onEditDraft, onBack }) {
   const [expandedIndex, setExpandedIndex] = useState(null);
+
+  useEffect(() => {
+    setExpandedIndex(null);
+  }, [message?.id]);
 
   if (!message) {
     return (
@@ -92,6 +114,7 @@ export function EmailReader({ message, thread = [], onReply, onForward, onBack }
 
   const threadList = thread.length > 0 ? thread : [message];
   const activeMessage = message;
+  const isDraft = !!activeMessage.draftId || (activeMessage.labels || []).includes('DRAFT');
   const threadIdShort = (activeMessage.threadId || activeMessage.id || '').slice(0, 8);
 
   return (
@@ -108,12 +131,20 @@ export function EmailReader({ message, thread = [], onReply, onForward, onBack }
         </div>
 
         <div className="reader-actions">
-          <button className="reader-btn" onClick={() => onReply(activeMessage)} title="Reply">
-            <Icon name="reply" /> <span>Reply</span>
-          </button>
-          <button className="reader-btn" onClick={() => onForward(activeMessage)} title="Forward">
-            <Icon name="forward" /> <span>Forward</span>
-          </button>
+          {isDraft && onEditDraft ? (
+            <button className="reader-btn" onClick={() => onEditDraft(activeMessage)} title="Edit Draft">
+              <Icon name="compose" /> <span>Edit Draft</span>
+            </button>
+          ) : (
+            <>
+              <button className="reader-btn" onClick={() => onReply(activeMessage)} title="Reply">
+                <Icon name="reply" /> <span>Reply</span>
+              </button>
+              <button className="reader-btn" onClick={() => onForward(activeMessage)} title="Forward">
+                <Icon name="forward" /> <span>Forward</span>
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -171,12 +202,20 @@ export function EmailReader({ message, thread = [], onReply, onForward, onBack }
 
           {/* Bottom Quick Action Bar */}
           <div className="reader-bottom-bar">
-            <button id="reader-reply-btn" className="btn-primary-reply" onClick={() => onReply(activeMessage)}>
-              <Icon name="reply" /> <span>Reply</span>
-            </button>
-            <button id="reader-forward-btn" className="btn-secondary-forward" onClick={() => onForward(activeMessage)}>
-              <Icon name="forward" /> <span>Forward</span>
-            </button>
+            {isDraft && onEditDraft ? (
+              <button id="reader-edit-draft-btn" className="btn-primary-reply" onClick={() => onEditDraft(activeMessage)}>
+                <Icon name="compose" /> <span>Edit &amp; Send Draft</span>
+              </button>
+            ) : (
+              <>
+                <button id="reader-reply-btn" className="btn-primary-reply" onClick={() => onReply(activeMessage)}>
+                  <Icon name="reply" /> <span>Reply</span>
+                </button>
+                <button id="reader-forward-btn" className="btn-secondary-forward" onClick={() => onForward(activeMessage)}>
+                  <Icon name="forward" /> <span>Forward</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </article>
