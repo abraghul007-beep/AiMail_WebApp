@@ -9,84 +9,30 @@ export function Sidebar({ folder, unreadCount = 0, onNavigate, onCompose, syncMo
     setDisplayTime(lastSyncTime || new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
   }, [lastSyncTime]);
 
+  // Fallback sync: keep the visible mailbox fresh even when Gmail Pub/Sub is not configured.
+  useEffect(() => {
+    const interval = Number(process.env.NEXT_PUBLIC_POLL_INTERVAL_SECONDS || 30);
+    if (!Number.isFinite(interval) || interval <= 0 || !onRefresh) return undefined;
+    const id = window.setInterval(() => onRefresh(), interval * 1000);
+    return () => window.clearInterval(id);
+  }, [onRefresh]);
+
   return (
     <aside className="sidebar">
-      {/* Brand Header */}
-      <div className="sidebar-brand">
-        <div className="brand-heading">
-          <span className="brand-spark">✦</span> Nebula
-        </div>
-        <div className="brand-subtext">GMAIL WORKSPACE</div>
-      </div>
-
-      {/* Primary Compose CTA */}
-      <button id="sidebar-compose-btn" className="compose-button" onClick={onCompose}>
-        <span>✎</span>
-        <span>Compose</span>
-      </button>
-
-      {/* Mailboxes Group */}
+      <div className="sidebar-brand"><div className="brand-heading"><span className="brand-spark">✦</span> Nebula</div><div className="brand-subtext">GMAIL WORKSPACE</div></div>
+      <button id="sidebar-compose-btn" className="compose-button" onClick={onCompose}><span>✎</span><span>Compose</span></button>
       <div className="nav-group">
         <div className="nav-header">Mailboxes</div>
-
-        <button
-          id="nav-inbox"
-          className={`nav-link ${folder === 'INBOX' ? 'active' : ''}`}
-          onClick={() => onNavigate('INBOX')}
-        >
-          <span className="nav-icon">▣</span>
-          <span className="nav-label">Inbox</span>
-          {unreadCount > 0 && <span className="nav-badge">{unreadCount}</span>}
-        </button>
-
-        <button
-          id="nav-starred"
-          className={`nav-link ${folder === 'STARRED' ? 'active' : ''}`}
-          onClick={() => onNavigate('STARRED')}
-        >
-          <span className="nav-icon">☆</span>
-          <span className="nav-label">Starred</span>
-        </button>
-
-        <button
-          id="nav-sent"
-          className={`nav-link ${folder === 'SENT' ? 'active' : ''}`}
-          onClick={() => onNavigate('SENT')}
-        >
-          <span className="nav-icon">➤</span>
-          <span className="nav-label">Sent</span>
-        </button>
-
-        <button
-          id="nav-draft"
-          className={`nav-link ${folder === 'DRAFT' ? 'active' : ''}`}
-          onClick={() => onNavigate('DRAFT')}
-        >
-          <span className="nav-icon">□</span>
-          <span className="nav-label">Drafts</span>
-        </button>
-
-        <button
-          id="nav-archive"
-          className={`nav-link ${folder === 'ARCHIVE' ? 'active' : ''}`}
-          onClick={() => onNavigate('ARCHIVE')}
-        >
-          <span className="nav-icon">▤</span>
-          <span className="nav-label">Archive</span>
-        </button>
+        <button id="nav-inbox" className={`nav-link ${folder === 'INBOX' ? 'active' : ''}`} onClick={() => onNavigate('INBOX')}><span className="nav-icon">▣</span><span className="nav-label">Inbox</span>{unreadCount > 0 && <span className="nav-badge">{unreadCount}</span>}</button>
+        <button id="nav-starred" className={`nav-link ${folder === 'STARRED' ? 'active' : ''}`} onClick={() => onNavigate('STARRED')}><span className="nav-icon">☆</span><span className="nav-label">Starred</span></button>
+        <button id="nav-sent" className={`nav-link ${folder === 'SENT' ? 'active' : ''}`} onClick={() => onNavigate('SENT')}><span className="nav-icon">➤</span><span className="nav-label">Sent</span></button>
+        <button id="nav-draft" className={`nav-link ${folder === 'DRAFT' ? 'active' : ''}`} onClick={() => onNavigate('DRAFT')}><span className="nav-icon">□</span><span className="nav-label">Drafts</span></button>
+        <button id="nav-archive" className={`nav-link ${folder === 'ARCHIVE' ? 'active' : ''}`} onClick={() => onNavigate('ARCHIVE')}><span className="nav-icon">▤</span><span className="nav-label">Archive</span></button>
       </div>
-
-      {/* Bottom Sync Status Card */}
       <div className="sidebar-footer">
         <div className="sync-status-card" onClick={onRefresh} title="Click to refresh mailbox sync">
-          <div className="sync-status-header">
-            <span className="sync-live-dot" />
-            <span>{syncMode || 'Push + fallback sync'}</span>
-          </div>
-          <div className="sync-meta-row">
-            <span>Mailbox sync</span>
-            <span suppressHydrationWarning>{displayTime}</span>
-          </div>
+          <div className="sync-status-header"><span className="sync-live-dot" /><span>{syncMode || 'Push + fallback sync'}</span></div>
+          <div className="sync-meta-row"><span>Mailbox sync</span><span suppressHydrationWarning>{displayTime}</span></div>
         </div>
       </div>
     </aside>
