@@ -6,25 +6,24 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
-
   const session = await getSession();
+
   if (!code) {
     return new NextResponse('OAuth authorization code missing.', { status: 400 });
   }
 
-  // Verify OAuth state if one was initiated in session
-  if (session.oauthState && state && state !== session.oauthState) {
-    console.warn('OAuth state mismatch, proceeding with caution or re-authenticating');
+  if (!session?.oauthState || !state || state !== session.oauthState) {
+    return new NextResponse('Invalid OAuth state. Please restart sign-in.', { status: 400 });
   }
 
   try {
     const oauth2Client = getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
-    await setSession({ tokens });
+    const nextSession = { tokens };
+    await setSession(nextSession);
 
     const response = NextResponse.redirect(new URL('/', request.url));
-    const encrypted = encryptSession({ tokens });
-    response.cookies.set(SESSION_COOKIE_NAME, encrypted, SESSION_COOKIE_OPTIONS);
+    response.cookies.set(SESSION_COOKIE_NAME, encryptSession(nextSession), SESSION_COOKIE_OPTIONS);
     return response;
   } catch (err) {
     console.error('OAuth token error:', err);
